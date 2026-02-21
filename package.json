@@ -1,0 +1,20 @@
+{
+  "name": "copilot-usage",
+  "version": "1.0.0",
+  "description": "CLI tool to get GitHub Copilot premium request usage",
+  "module": "index.ts",
+  "type": "module",
+  "bin": {
+    "copilot-usage": "./index.ts"
+  },
+  "scripts": {
+    "start": "bun run index.ts",
+    "build": "bun build index.ts --compile --outfile copilot-usage"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
