@@ -1,0 +1,13 @@
+# Add this to your ~/.config/i3/config
+# This replaces the default i3status with copilot-usage -i3bar
+
+bar {
+    status_command copilot-usage -i3bar
+    tray_output primary
+    
+    # Optional: customize colors
+    colors {
+        statusline #ffffff
+        background #000000
+    }
+}

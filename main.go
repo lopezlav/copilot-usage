@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -35,6 +36,7 @@ func main() {
 		planFlag    = flag.String("plan", "", "Copilot plan (free, pro, pro+, business, enterprise)")
 		limitFlag   = flag.Int("limit", 0, "Custom request limit")
 		jsonFlag    = flag.Bool("json", false, "Output JSON")
+		i3barFlag   = flag.Bool("i3bar", false, "Output i3bar JSON protocol")
 		helpFlag    = flag.Bool("help", false, "Show help")
 		versionFlag = flag.Bool("version", false, "Show version")
 	)
@@ -53,6 +55,11 @@ func main() {
 	plan := getPlan(*planFlag)
 	limit := getLimit(*limitFlag, plan)
 
+	if *i3barFlag {
+		runI3BarMode(plan, limit)
+		return
+	}
+
 	username := getUsername()
 	usage := fetchUsage(username)
 
@@ -67,6 +74,88 @@ func main() {
 	printBox(username, plan, limit, totalUsage, percentage, usage.UsageItems)
 }
 
+func runI3BarMode(plan string, limit int) {
+	fmt.Println(`{"version":1}`)
+	fmt.Println("[")
+	os.Stdout.Sync()
+
+	username := getUsername()
+
+	cmd := exec.Command("i3status", "-c", "/home/chope/.config/i3status/config")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error starting i3status:", err)
+		os.Exit(1)
+	}
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error starting i3status:", err)
+		os.Exit(1)
+	}
+	defer cmd.Wait()
+
+	scanner := bufio.NewScanner(stdout)
+	first := true
+	lastFetch := time.Time{}
+	var cachedItem map[string]interface{}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		line = strings.TrimSpace(line)
+
+		if line == "" || line == `[` || line == `{"version":1}` {
+			continue
+		}
+
+		isContinuation := strings.HasPrefix(line, ",")
+		if isContinuation {
+			line = line[1:]
+		}
+
+		if time.Since(lastFetch) > 60*time.Second || cachedItem == nil {
+			usage := fetchUsage(username)
+			totalUsage := calculateTotalUsage(usage.UsageItems)
+			percentage := (totalUsage / float64(limit)) * 100
+
+			filled := int(percentage / 10)
+			if filled > 10 {
+				filled = 10
+			}
+			empty := 10 - filled
+			bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
+
+			cachedItem = map[string]interface{}{
+				"name":      "copilot",
+				"full_text": fmt.Sprintf("Copilot: %s %.1f%%", bar, percentage),
+				"color":     "#00FF00",
+			}
+			lastFetch = time.Now()
+		}
+
+		var items []map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &items); err == nil {
+			newItems := append([]map[string]interface{}{cachedItem}, items...)
+			output, _ := json.Marshal(newItems)
+
+			if first {
+				fmt.Println(string(output))
+				first = false
+			} else {
+				fmt.Println("," + string(output))
+			}
+			os.Stdout.Sync()
+		} else {
+			if first {
+				fmt.Println(line)
+				first = false
+			} else {
+				fmt.Println("," + line)
+			}
+			os.Stdout.Sync()
+		}
+	}
+}
+
 func showHelp() {
 	fmt.Println(`copilot-usage
 
@@ -79,6 +168,7 @@ Flags:
   -plan string    Copilot plan (free, pro, pro+, business, enterprise)
   -limit int      Custom request limit
   -json           Output JSON
+  -i3bar          Output i3bar JSON protocol for status bar
   -version        Show version
   -help           Show help
 
