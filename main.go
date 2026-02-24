@@ -60,8 +60,16 @@ func main() {
 		return
 	}
 
-	username := getUsername()
-	usage := fetchUsage(username)
+	username, err := getUsername()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+	usage, err := fetchUsage(username)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error fetching usage:", err)
+		os.Exit(1)
+	}
 
 	totalUsage := calculateTotalUsage(usage.UsageItems)
 	percentage := (totalUsage / float64(limit)) * 100
@@ -79,7 +87,7 @@ func runI3BarMode(plan string, limit int) {
 	fmt.Println("[")
 	os.Stdout.Sync()
 
-	username := getUsername()
+	username, usernameErr := getUsername()
 
 	cmd := exec.Command("i3status", "-c", "/home/chope/.config/i3status/config")
 	stdout, err := cmd.StdoutPipe()
@@ -113,21 +121,40 @@ func runI3BarMode(plan string, limit int) {
 		}
 
 		if time.Since(lastFetch) > 60*time.Second || cachedItem == nil {
-			usage := fetchUsage(username)
-			totalUsage := calculateTotalUsage(usage.UsageItems)
-			percentage := (totalUsage / float64(limit)) * 100
-
-			filled := int(percentage / 10)
-			if filled > 10 {
-				filled = 10
+			if username == "" || usernameErr != nil {
+				username, usernameErr = getUsername()
 			}
-			empty := 10 - filled
-			bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
+			if usernameErr != nil {
+				cachedItem = map[string]interface{}{
+					"name":      "copilot",
+					"full_text": "Copilot: unavailable",
+					"color":     "#888888",
+				}
+			} else {
+				usage, err := fetchUsage(username)
+				if err != nil {
+					cachedItem = map[string]interface{}{
+						"name":      "copilot",
+						"full_text": "Copilot: unavailable",
+						"color":     "#888888",
+					}
+				} else {
+					totalUsage := calculateTotalUsage(usage.UsageItems)
+					percentage := (totalUsage / float64(limit)) * 100
 
-			cachedItem = map[string]interface{}{
-				"name":      "copilot",
-				"full_text": fmt.Sprintf("Copilot: %s %.1f%%", bar, percentage),
-				"color":     "#00FF00",
+					filled := int(percentage / 10)
+					if filled > 10 {
+						filled = 10
+					}
+					empty := 10 - filled
+					bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
+
+					cachedItem = map[string]interface{}{
+						"name":      "copilot",
+						"full_text": fmt.Sprintf("Copilot: %s %.1f%%", bar, percentage),
+						"color":     "#00FF00",
+					}
+				}
 			}
 			lastFetch = time.Now()
 		}
@@ -204,36 +231,45 @@ func getLimit(cliLimit int, plan string) int {
 	return 1500
 }
 
-func getUsername() string {
+func getUsername() (string, error) {
 	cmd := exec.Command("gh", "api", "/user", "-q", ".login")
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error: Could not get username. Is gh CLI authenticated?")
-		os.Exit(1)
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return "", fmt.Errorf("could not get username: %s", msg)
+		}
+		return "", fmt.Errorf("could not get username: %w", err)
 	}
-	return strings.TrimSpace(string(out))
+	username := strings.TrimSpace(string(out))
+	if username == "" {
+		return "", fmt.Errorf("could not get username: empty response")
+	}
+	return username, nil
 }
 
-func fetchUsage(username string) UsageResponse {
+func fetchUsage(username string) (UsageResponse, error) {
 	now := time.Now()
 	year := now.Year()
 	month := int(now.Month())
 
 	endpoint := fmt.Sprintf("/users/%s/settings/billing/premium_request/usage?year=%d&month=%d", username, year, month)
 	cmd := exec.Command("gh", "api", endpoint)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error fetching usage:", err)
-		os.Exit(1)
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return UsageResponse{}, fmt.Errorf("%s", msg)
+		}
+		return UsageResponse{}, err
 	}
 
 	var usage UsageResponse
 	if err := json.Unmarshal(out, &usage); err != nil {
-		fmt.Fprintln(os.Stderr, "Error parsing response:", err)
-		os.Exit(1)
+		return UsageResponse{}, err
 	}
 
-	return usage
+	return usage, nil
 }
 
 func calculateTotalUsage(items []UsageItem) float64 {
